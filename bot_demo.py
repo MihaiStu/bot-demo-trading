@@ -1,148 +1,141 @@
 import requests
 import time
-import csv
-from datetime import datetime, timedelta
+import json
+import random
 
-# ================= CONFIGURACIÓN =================
-CAPITAL_INICIAL = 1000.0
-INVERSION_POR_TOKEN = 100.0
+# === CONFIGURACIÓN ===
+CAPITAL_INICIAL = 1000.0        # Capital demo
+CAPITAL_DISPONIBLE = CAPITAL_INICIAL
+CAPITAL_POR_TRADE = 50.0        # Cada operación usa 50 USD
+MIN_LIQUIDEZ = 10000            # Liquidez mínima USD
+MIN_VOLUMEN = 5000              # Volumen mínimo 24h USD
+TAKE_PROFIT = 1.03              # +3% TP
+STOP_LOSS = 0.98                # -2% SL
+API_URL = "https://api.dexscreener.com/latest/dex/pairs/solana"
 
-LIQUIDEZ_MINIMA = 5000       # USD
-VOLUMEN_MINIMO = 10000       # USD
-FDV_MAXIMO = 2_000_000       # USD
+HISTORIAL_FILE = "historial_operaciones.json"
 
-TAKE_PROFIT = 0.20           # +20%
-STOP_LOSS = -0.10            # -10%
-MAX_DIAS_HOLD = 3            # Cerrar después de 3 días
+# === FUNCIONES AUXILIARES ===
 
-API_URL = "https://public-api.birdeye.so/public/token/new-list"
-HEADERS = {"x-chain": "solana"}
-
-# ================= VARIABLES DE ESTADO =================
-capital = CAPITAL_INICIAL
-operaciones_abiertas = []  # [{token, precio_entrada, fecha_entrada}]
-historial = []
-
-# ================= FUNCIONES =================
-def obtener_tokens_nuevos():
+def obtener_tokens_solana():
+    """Obtiene tokens activos en Solana desde Dexscreener"""
     try:
-        res = requests.get(API_URL, headers=HEADERS, timeout=10).json()
-        if "data" in res and "items" in res["data"]:
-            return res["data"]["items"]
+        resp = requests.get(API_URL, timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            return data.get("pairs", [])
         else:
+            print(f"❌ Error al obtener tokens ({resp.status_code})")
             return []
     except Exception as e:
-        print(f"❌ Error consultando API: {e}")
+        print(f"❌ Error de conexión con API: {e}")
         return []
 
-def filtrar_token(token):
-    liquidez = token.get("liquidity", {}).get("usd", 0)
-    volumen = token.get("volume_24h", {}).get("usd", 0)
-    fdv = token.get("fdv", 0)
+def filtrar_tokens_validos(tokens):
+    """Filtra tokens con liquidez y volumen suficientes"""
+    filtrados = []
+    for t in tokens:
+        liquidity = t.get("liquidity", {}).get("usd", 0)
+        volumen24h = t.get("volume", {}).get("h24", 0)
+        if liquidity and volumen24h and liquidity >= MIN_LIQUIDEZ and volumen24h >= MIN_VOLUMEN:
+            filtrados.append({
+                "nombre": t.get("baseToken", {}).get("name", "Desconocido"),
+                "simbolo": t.get("baseToken", {}).get("symbol", "???"),
+                "precio": float(t.get("priceUsd", 0)),
+                "liquidez": liquidity,
+                "volumen24h": volumen24h
+            })
+    return filtrados
 
-    if liquidez >= LIQUIDEZ_MINIMA and volumen >= VOLUMEN_MINIMO and fdv <= FDV_MAXIMO:
-        return True
-    return False
+def simular_compra(token):
+    """Simula compra de un token"""
+    global CAPITAL_DISPONIBLE
+    if CAPITAL_DISPONIBLE < CAPITAL_POR_TRADE:
+        print("⚠️ No hay suficiente capital para nueva compra")
+        return None
 
-def simular_precio_actual(precio_inicial):
-    # Simulación de cambio de precio (±5% cada ciclo)
-    import random
-    cambio = random.uniform(-0.05, 0.05)
-    return precio_inicial * (1 + cambio)
+    cantidad = CAPITAL_POR_TRADE / token["precio"]
+    CAPITAL_DISPONIBLE -= CAPITAL_POR_TRADE
 
-def comprar_token(token):
-    global capital
-    if capital < INVERSION_POR_TOKEN:
-        print("⚠ No hay capital suficiente para comprar más tokens.")
-        return
+    print(f"✅ COMPRA {token['simbolo']} - {cantidad:.4f} unidades a {token['precio']:.6f} USD")
 
-    nombre = token.get("name", "Desconocido")
-    simbolo = token.get("symbol", "?")
-    precio_entrada = token.get("price", 1.0) or 1.0
-    fecha_entrada = datetime.now()
+    return {
+        "token": token["simbolo"],
+        "precio_compra": token["precio"],
+        "cantidad": cantidad,
+        "capital_invertido": CAPITAL_POR_TRADE,
+        "status": "abierta"
+    }
 
-    capital -= INVERSION_POR_TOKEN
+def simular_movimiento_precio(precio):
+    """Simula fluctuación del mercado"""
+    variacion = random.uniform(-0.025, 0.035)  # -2.5% a +3.5%
+    return precio * (1 + variacion)
 
-    operaciones_abiertas.append({
-        "token": f"{nombre} ({simbolo})",
-        "precio_entrada": precio_entrada,
-        "fecha_entrada": fecha_entrada,
-        "invertido": INVERSION_POR_TOKEN
-    })
+def evaluar_trade(trade):
+    """Evalúa TP/SL"""
+    nuevo_precio = simular_movimiento_precio(trade["precio_compra"])
+    if nuevo_precio >= trade["precio_compra"] * TAKE_PROFIT:
+        ganancia = trade["capital_invertido"] * 0.03
+        return "cerrada", ganancia
+    elif nuevo_precio <= trade["precio_compra"] * STOP_LOSS:
+        perdida = -trade["capital_invertido"] * 0.02
+        return "cerrada", perdida
+    else:
+        return "abierta", 0.0
 
-    print(f"✅ COMPRA DEMO: {nombre} por {INVERSION_POR_TOKEN}€ a {precio_entrada} USD")
+def guardar_historial(historial):
+    with open(HISTORIAL_FILE, "w") as f:
+        json.dump(historial, f, indent=4)
 
-def revisar_operaciones():
-    global capital, operaciones_abiertas, historial
+# === FUNCIÓN PRINCIPAL ===
 
-    nuevas_op = []
-    for op in operaciones_abiertas:
-        precio_actual = simular_precio_actual(op["precio_entrada"])
-        variacion = (precio_actual - op["precio_entrada"]) / op["precio_entrada"]
+def main():
+    global CAPITAL_DISPONIBLE
+    operaciones_abiertas = []
+    historial = []
 
-        # Decidir vender
-        dias_hold = (datetime.now() - op["fecha_entrada"]).days
-        vender = False
-
-        if variacion >= TAKE_PROFIT:
-            vender = True
-            resultado = op["invertido"] * (1 + TAKE_PROFIT)
-            motivo = "Take Profit ✅"
-        elif variacion <= STOP_LOSS:
-            vender = True
-            resultado = op["invertido"] * (1 + STOP_LOSS)
-            motivo = "Stop Loss ❌"
-        elif dias_hold >= MAX_DIAS_HOLD:
-            vender = True
-            resultado = op["invertido"]  # neutro
-            motivo = "Cierre por tiempo ⏳"
-        else:
-            nuevas_op.append(op)
-            continue
-
-        capital += resultado
-        beneficio = resultado - op["invertido"]
-
-        historial.append({
-            "token": op["token"],
-            "fecha_entrada": op["fecha_entrada"].strftime("%Y-%m-%d %H:%M"),
-            "fecha_salida": datetime.now().strftime("%Y-%m-%d %H:%M"),
-            "beneficio": round(beneficio, 2),
-            "capital_total": round(capital, 2),
-            "motivo": motivo
-        })
-
-        print(f"💰 VENTA: {op['token']} | {motivo} | Beneficio: {beneficio:.2f}€ | Capital total: {capital:.2f}€")
-
-    operaciones_abiertas = nuevas_op
-    guardar_historial()
-
-def guardar_historial():
-    with open("trading_log.csv", "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=["token", "fecha_entrada", "fecha_salida", "beneficio", "capital_total", "motivo"])
-        writer.writeheader()
-        writer.writerows(historial)
-
-def ciclo_bot():
-    global capital
-    print(f"\n=== CICLO BOT | Capital disponible: {capital:.2f}€ ===")
-
-    # Revisar operaciones abiertas
-    if operaciones_abiertas:
-        revisar_operaciones()
-
-    # Detectar tokens nuevos
-    tokens = obtener_tokens_nuevos()
-    print(f"🔍 Tokens detectados: {len(tokens)}")
-
-    for token in tokens:
-        if filtrar_token(token):
-            comprar_token(token)
-
-# ================= LOOP PRINCIPAL =================
-if __name__ == "__main__":
-    print("🚀 Iniciando BOT DEMO DE TRADING...")
+    print("🚀 BOT DEMO SOLANA INICIADO")
+    print(f"Capital inicial: {CAPITAL_DISPONIBLE} USD")
 
     while True:
-        ciclo_bot()
-        time.sleep(60)  # espera 1 minuto por ciclo (para demo)
+        print("\n🔄 Buscando tokens válidos en Solana...")
+        tokens = obtener_tokens_solana()
+        tokens_validos = filtrar_tokens_validos(tokens)
+
+        if not tokens_validos:
+            print("⚠️ No hay tokens nuevos válidos. Reintentando en 30s...")
+            time.sleep(30)
+            continue
+
+        # Selecciona un token aleatorio de los filtrados
+        token = random.choice(tokens_validos)
+        trade = simular_compra(token)
+        if trade:
+            operaciones_abiertas.append(trade)
+
+        # Revisión de operaciones abiertas
+        nuevas_abiertas = []
+        for op in operaciones_abiertas:
+            status, resultado = evaluar_trade(op)
+            if status == "cerrada":
+                CAPITAL_DISPONIBLE += op["capital_invertido"] + resultado
+                print(f"💰 Operación {op['token']} cerrada. Resultado: {resultado:.2f} USD | Capital: {CAPITAL_DISPONIBLE:.2f} USD")
+                historial.append({
+                    "token": op["token"],
+                    "resultado": resultado,
+                    "capital_restante": CAPITAL_DISPONIBLE
+                })
+                guardar_historial(historial)
+            else:
+                nuevas_abiertas.append(op)
+
+        operaciones_abiertas = nuevas_abiertas
+
+        print(f"📊 Capital actual: {CAPITAL_DISPONIBLE:.2f} USD | Operaciones abiertas: {len(operaciones_abiertas)}")
+
+        time.sleep(30)  # Espera 30s antes de la siguiente búsqueda
+
+
+if __name__ == "__main__":
+    main()

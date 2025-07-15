@@ -62,7 +62,7 @@ def simular_compra_y_venta(token):
     # Invertimos solo 50 USDC en cada token como prueba
     inversion = min(50, capital_disponible)
     if inversion <= 0:
-        print("⚠ Sin capital disponible para operar")
+        print("⚠️ Sin capital disponible para operar")
         return
 
     print(f"✅ Comprando {token['simbolo']} ({token['nombre']}) con {inversion} USDC...")
@@ -101,7 +101,7 @@ def run_bot():
                 for token in validos[:3]:  # Solo los 3 primeros para no saturar
                     simular_compra_y_venta(token)
             else:
-                print("⚠ No hay tokens con liquidez/volumen suficiente.")
+                print("⚠️ No hay tokens con liquidez/volumen suficiente.")
         else:
             print("❌ No se obtuvieron tokens nuevos.")
 
@@ -113,7 +113,7 @@ def run_bot():
 # SERVIDOR WEB PARA RENDER
 # =======================
 
-app = Flask(_name_)
+app = Flask(__name__)
 
 @app.route('/')
 def home():
@@ -123,9 +123,9 @@ def home():
 # =======================
 # EJECUCIÓN PRINCIPAL
 # =======================
-if _name_ == "_main_":
+if __name__ == "__main__":
     # Hilo en segundo plano para el bot
     threading.Thread(target=run_bot, daemon=True).start()
 
     # Mantener el puerto abierto para Render
-    app.run(host="0.0.0.0", port=5000)
+    app.run(host="0.0.0.0", port=5000)

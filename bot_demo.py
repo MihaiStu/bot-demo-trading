@@ -1,141 +1,131 @@
-import requests
+import threading
 import time
-import json
-import random
+import requests
+from flask import Flask
 
-# === CONFIGURACIÓN ===
-CAPITAL_INICIAL = 1000.0        # Capital demo
-CAPITAL_DISPONIBLE = CAPITAL_INICIAL
-CAPITAL_POR_TRADE = 50.0        # Cada operación usa 50 USD
-MIN_LIQUIDEZ = 10000            # Liquidez mínima USD
-MIN_VOLUMEN = 5000              # Volumen mínimo 24h USD
-TAKE_PROFIT = 1.03              # +3% TP
-STOP_LOSS = 0.98                # -2% SL
-API_URL = "https://api.dexscreener.com/latest/dex/pairs/solana"
+# =======================
+# CONFIGURACIÓN
+# =======================
+API_SOLANA_NEW_TOKENS = "https://public-api.birdeye.so/public/token/new-list"
+HEADERS = {"accept": "application/json"}
 
-HISTORIAL_FILE = "historial_operaciones.json"
+# Simulación de capital inicial (1000 USDC en demo)
+CAPITAL_INICIAL = 1000.0
+capital_disponible = CAPITAL_INICIAL
 
-# === FUNCIONES AUXILIARES ===
 
-def obtener_tokens_solana():
-    """Obtiene tokens activos en Solana desde Dexscreener"""
+# =======================
+# FUNCIONES DEL BOT
+# =======================
+
+def detectar_tokens_nuevos():
+    """
+    Consulta la API de BirdEye para obtener tokens nuevos en Solana.
+    """
     try:
-        resp = requests.get(API_URL, timeout=10)
-        if resp.status_code == 200:
-            data = resp.json()
-            return data.get("pairs", [])
+        response = requests.get(API_SOLANA_NEW_TOKENS, headers=HEADERS, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            return data.get("data", [])
         else:
-            print(f"❌ Error al obtener tokens ({resp.status_code})")
-            return []
+            print(f"❌ Error API BirdEye: {response.status_code}")
     except Exception as e:
-        print(f"❌ Error de conexión con API: {e}")
-        return []
+        print(f"❌ Error en la consulta API: {e}")
+    return []
+
 
 def filtrar_tokens_validos(tokens):
-    """Filtra tokens con liquidez y volumen suficientes"""
+    """
+    Filtra tokens que tengan liquidez y volumen aceptable.
+    """
     filtrados = []
-    for t in tokens:
-        liquidity = t.get("liquidity", {}).get("usd", 0)
-        volumen24h = t.get("volume", {}).get("h24", 0)
-        if liquidity and volumen24h and liquidity >= MIN_LIQUIDEZ and volumen24h >= MIN_VOLUMEN:
+    for token in tokens:
+        liquidez = token.get("liquidity", {}).get("usd", 0)
+        volumen = token.get("v24hUSD", 0)
+
+        if liquidez and volumen and liquidez > 10000 and volumen > 5000:
             filtrados.append({
-                "nombre": t.get("baseToken", {}).get("name", "Desconocido"),
-                "simbolo": t.get("baseToken", {}).get("symbol", "???"),
-                "precio": float(t.get("priceUsd", 0)),
-                "liquidez": liquidity,
-                "volumen24h": volumen24h
+                "nombre": token.get("name", "Desconocido"),
+                "simbolo": token.get("symbol", "?"),
+                "liquidez": liquidez,
+                "volumen24h": volumen
             })
     return filtrados
 
-def simular_compra(token):
-    """Simula compra de un token"""
-    global CAPITAL_DISPONIBLE
-    if CAPITAL_DISPONIBLE < CAPITAL_POR_TRADE:
-        print("⚠️ No hay suficiente capital para nueva compra")
-        return None
 
-    cantidad = CAPITAL_POR_TRADE / token["precio"]
-    CAPITAL_DISPONIBLE -= CAPITAL_POR_TRADE
+def simular_compra_y_venta(token):
+    """
+    Simula la compra y venta del token con lógica básica.
+    """
+    global capital_disponible
 
-    print(f"✅ COMPRA {token['simbolo']} - {cantidad:.4f} unidades a {token['precio']:.6f} USD")
+    # Invertimos solo 50 USDC en cada token como prueba
+    inversion = min(50, capital_disponible)
+    if inversion <= 0:
+        print("⚠ Sin capital disponible para operar")
+        return
 
-    return {
-        "token": token["simbolo"],
-        "precio_compra": token["precio"],
-        "cantidad": cantidad,
-        "capital_invertido": CAPITAL_POR_TRADE,
-        "status": "abierta"
-    }
+    print(f"✅ Comprando {token['simbolo']} ({token['nombre']}) con {inversion} USDC...")
 
-def simular_movimiento_precio(precio):
-    """Simula fluctuación del mercado"""
-    variacion = random.uniform(-0.025, 0.035)  # -2.5% a +3.5%
-    return precio * (1 + variacion)
+    # Simulación de precio
+    precio_entrada = 1.0
+    take_profit = precio_entrada * 1.05  # 5% de beneficio
+    stop_loss = precio_entrada * 0.97    # 3% de pérdida
 
-def evaluar_trade(trade):
-    """Evalúa TP/SL"""
-    nuevo_precio = simular_movimiento_precio(trade["precio_compra"])
-    if nuevo_precio >= trade["precio_compra"] * TAKE_PROFIT:
-        ganancia = trade["capital_invertido"] * 0.03
-        return "cerrada", ganancia
-    elif nuevo_precio <= trade["precio_compra"] * STOP_LOSS:
-        perdida = -trade["capital_invertido"] * 0.02
-        return "cerrada", perdida
+    # Simular resultado aleatorio (éxito 60%)
+    import random
+    resultado = random.random()
+    if resultado < 0.6:
+        capital_disponible += inversion * 0.05  # +5%
+        print(f"💰 Vendido {token['simbolo']} con +5% beneficio ✅ Capital: {capital_disponible:.2f}")
     else:
-        return "abierta", 0.0
+        capital_disponible -= inversion * 0.03  # -3%
+        print(f"❌ Vendido {token['simbolo']} con -3% pérdida ❗ Capital: {capital_disponible:.2f}")
 
-def guardar_historial(historial):
-    with open(HISTORIAL_FILE, "w") as f:
-        json.dump(historial, f, indent=4)
 
-# === FUNCIÓN PRINCIPAL ===
+def run_bot():
+    """
+    Bucle principal del bot.
+    """
+    global capital_disponible
 
-def main():
-    global CAPITAL_DISPONIBLE
-    operaciones_abiertas = []
-    historial = []
-
-    print("🚀 BOT DEMO SOLANA INICIADO")
-    print(f"Capital inicial: {CAPITAL_DISPONIBLE} USD")
+    print("🤖 Bot Solana DEMO iniciado con capital:", capital_disponible, "USDC")
 
     while True:
-        print("\n🔄 Buscando tokens válidos en Solana...")
-        tokens = obtener_tokens_solana()
-        tokens_validos = filtrar_tokens_validos(tokens)
-
-        if not tokens_validos:
-            print("⚠️ No hay tokens nuevos válidos. Reintentando en 30s...")
-            time.sleep(30)
-            continue
-
-        # Selecciona un token aleatorio de los filtrados
-        token = random.choice(tokens_validos)
-        trade = simular_compra(token)
-        if trade:
-            operaciones_abiertas.append(trade)
-
-        # Revisión de operaciones abiertas
-        nuevas_abiertas = []
-        for op in operaciones_abiertas:
-            status, resultado = evaluar_trade(op)
-            if status == "cerrada":
-                CAPITAL_DISPONIBLE += op["capital_invertido"] + resultado
-                print(f"💰 Operación {op['token']} cerrada. Resultado: {resultado:.2f} USD | Capital: {CAPITAL_DISPONIBLE:.2f} USD")
-                historial.append({
-                    "token": op["token"],
-                    "resultado": resultado,
-                    "capital_restante": CAPITAL_DISPONIBLE
-                })
-                guardar_historial(historial)
+        print("🔍 Consultando nuevos tokens...")
+        tokens = detectar_tokens_nuevos()
+        if tokens:
+            validos = filtrar_tokens_validos(tokens)
+            if validos:
+                print(f"✅ {len(validos)} tokens válidos detectados.")
+                for token in validos[:3]:  # Solo los 3 primeros para no saturar
+                    simular_compra_y_venta(token)
             else:
-                nuevas_abiertas.append(op)
+                print("⚠ No hay tokens con liquidez/volumen suficiente.")
+        else:
+            print("❌ No se obtuvieron tokens nuevos.")
 
-        operaciones_abiertas = nuevas_abiertas
-
-        print(f"📊 Capital actual: {CAPITAL_DISPONIBLE:.2f} USD | Operaciones abiertas: {len(operaciones_abiertas)}")
-
-        time.sleep(30)  # Espera 30s antes de la siguiente búsqueda
+        print("⏳ Esperando 1 minuto para la siguiente consulta...")
+        time.sleep(60)
 
 
-if __name__ == "__main__":
-    main()
+# =======================
+# SERVIDOR WEB PARA RENDER
+# =======================
+
+app = Flask(_name_)
+
+@app.route('/')
+def home():
+    return f"✅ Bot demo Solana corriendo en Render | Capital actual: {capital_disponible:.2f} USDC"
+
+
+# =======================
+# EJECUCIÓN PRINCIPAL
+# =======================
+if _name_ == "_main_":
+    # Hilo en segundo plano para el bot
+    threading.Thread(target=run_bot, daemon=True).start()
+
+    # Mantener el puerto abierto para Render
+    app.run(host="0.0.0.0", port=5000)

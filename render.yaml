@@ -2,6 +2,6 @@ services:
   - type: worker
     name: bot-demo-trading
     env: python
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python bot_demo.py"
     plan: free
-    buildCommand: ""
-    startCommand: python bot_demo.py 

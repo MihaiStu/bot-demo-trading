@@ -1,0 +1,7 @@
+services:
+  - type: worker
+    name: bot-demo-trading
+    env: python
+    plan: free
+    buildCommand: ""
+    startCommand: python bot_demo.py 

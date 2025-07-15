@@ -140,7 +140,7 @@ def ciclo_bot():
             comprar_token(token)
 
 # ================= LOOP PRINCIPAL =================
-if __name_ == "_main_":
+if __name__ == "_main_":
     print("🚀 Iniciando BOT DEMO DE TRADING...")
 
     while True:
